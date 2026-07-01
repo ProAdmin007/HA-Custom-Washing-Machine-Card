@@ -25,9 +25,14 @@ export interface WashingMachineCardConfig {
   type: string;
   status_entity: string;
   program_entity?: string;
+  program_phase_entity?: string;
   remaining_time_entity?: string;
+  finish_time_entity?: string;
+  progress_entity?: string;
   power_entity?: string;
   door_entity?: string;
+  door_open_color?: string;
+  door_closed_color?: string;
   name?: string;
   icon?: string;
   state_map?: StateMap;

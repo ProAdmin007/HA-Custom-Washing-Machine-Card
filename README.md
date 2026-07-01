@@ -5,9 +5,10 @@ A simple, easily customizable [Home Assistant](https://www.home-assistant.io/) L
 ## Features
 
 - Status header with icon and label (running / paused / finished / error / ...)
-- Optional program + remaining time row
+- Optional program + current program phase/step row (e.g. "Cotton 40 · Rinsing")
+- Optional remaining time, finish time and progress bar — finish time is computed from the remaining time if you don't have a dedicated finish-time entity
 - Optional power consumption row
-- Optional door open/closed row
+- Optional door open/closed row, with separately configurable colors for each state
 - Rows for entities you don't configure are simply omitted — no errors, no empty placeholders
 - Status label/icon/color mapping works across vendors out of the box, with an optional `state_map` override for vendor-specific state strings
 - Visual (GUI) editor, plus full YAML config
@@ -33,9 +34,14 @@ Add the card via the dashboard UI ("Add card" → "Washing Machine Card") and fi
 type: custom:washing-machine-card
 status_entity: sensor.wasmachine_operation_state   # required
 program_entity: sensor.wasmachine_program            # optional
+program_phase_entity: sensor.wasmachine_phase        # optional, e.g. "Rinsing"/"Spinning"
 remaining_time_entity: sensor.wasmachine_remaining_time  # optional
+finish_time_entity: sensor.wasmachine_finish_time    # optional, absolute datetime
+progress_entity: sensor.wasmachine_progress          # optional, 0-100
 power_entity: sensor.wasmachine_power                # optional
 door_entity: binary_sensor.wasmachine_deur           # optional
+door_open_color: "red"                               # optional, defaults to a warning color
+door_closed_color: "green"                            # optional, defaults to the theme's secondary text color
 name: "Wasmachine"                                   # optional, defaults to the status entity's friendly name
 icon: mdi:washing-machine                            # optional, overrides the status-based icon
 state_map:                                           # optional, extend/override the default status mapping
@@ -49,9 +55,14 @@ state_map:                                           # optional, extend/override
 |---|---|---|
 | `status_entity` | Yes | Entity whose state represents the machine's operation status (e.g. Run/Finished/Ready). |
 | `program_entity` | No | Entity holding the active program name. |
-| `remaining_time_entity` | No | Entity holding the remaining time (state + optional `unit_of_measurement`). |
+| `program_phase_entity` | No | Entity holding the current step/phase within the program (e.g. Wash/Rinse/Spin). Shown alongside the program name. |
+| `remaining_time_entity` | No | Entity holding the remaining time (state + optional `unit_of_measurement`, minutes/hours/seconds). |
+| `finish_time_entity` | No | Entity holding an absolute finish datetime. If omitted but `remaining_time_entity` is set, the finish time is estimated as now + remaining time. |
+| `progress_entity` | No | Entity holding progress as a 0-100 number; drives the progress bar. Without this entity, no progress bar is shown — there's no reliable way to derive a percentage from remaining time alone. |
 | `power_entity` | No | Entity holding current power draw (W) or energy. |
 | `door_entity` | No | Binary sensor for the door; `on` is treated as open. |
+| `door_open_color` | No | CSS color (name, hex, or `var(--...)`) used for the door row when open. Defaults to a warning color. |
+| `door_closed_color` | No | CSS color used for the door row when closed. Defaults to the theme's secondary text color. |
 | `name` | No | Overrides the displayed name. |
 | `icon` | No | Overrides the status-based icon. |
 | `state_map` | No | Extends/overrides the default status → `{label, icon, color}` mapping. Matched case-insensitively; unmapped states fall back to a title-cased display of the raw state. |
