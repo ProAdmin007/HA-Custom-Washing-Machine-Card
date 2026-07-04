@@ -6,11 +6,13 @@ A simple, easily customizable [Home Assistant](https://www.home-assistant.io/) L
 
 - Status header with icon and label (running / paused / finished / error / ...)
 - Optional program + current program phase/step row (e.g. "Cotton 40 · Rinsing")
-- Optional remaining time, finish time and progress bar — finish time is computed from the remaining time if you don't have a dedicated finish-time entity
+- Optional remaining time, finish time and progress bar showing how much longer the wash needs — the bar works even without a dedicated progress-percentage entity, by tracking the highest remaining-time reading seen since the cycle started as its 100% baseline
 - Optional power consumption row
 - Optional door open/closed row, with separately configurable colors for each state
 - Rows for entities you don't configure are simply omitted — no errors, no empty placeholders
 - Status label/icon/color mapping works across vendors out of the box, with an optional `state_map` override for vendor-specific state strings
+- Three display modes: full (default), compact (a single status-badge row, in the style of the [air-quality-card](https://github.com/KadenThomp36/air-quality-card)), or expandable (compact, tap to reveal the full card)
+- Optional `tap_action`/`hold_action` (more-info, toggle, navigate, ...), using Home Assistant's standard action vocabulary
 - Visual (GUI) editor, plus full YAML config
 
 ## Installation
@@ -44,6 +46,11 @@ door_open_color: "red"                               # optional, defaults to a w
 door_closed_color: "green"                            # optional, defaults to the theme's secondary text color
 name: "Wasmachine"                                   # optional, defaults to the status entity's friendly name
 icon: mdi:washing-machine                            # optional, overrides the status-based icon
+display: full                                        # optional: full (default) | compact | expandable
+tap_action:                                          # optional, HA action config
+  action: more-info
+hold_action:                                         # optional, HA action config
+  action: toggle
 state_map:                                           # optional, extend/override the default status mapping
   delayedstart:
     label: "Delayed start"
@@ -58,14 +65,20 @@ state_map:                                           # optional, extend/override
 | `program_phase_entity` | No | Entity holding the current step/phase within the program (e.g. Wash/Rinse/Spin). Shown alongside the program name. |
 | `remaining_time_entity` | No | Entity holding the remaining time (state + optional `unit_of_measurement`, minutes/hours/seconds). |
 | `finish_time_entity` | No | Entity holding an absolute finish datetime. If omitted but `remaining_time_entity` is set, the finish time is estimated as now + remaining time. |
-| `progress_entity` | No | Entity holding progress as a 0-100 number; drives the progress bar. Without this entity, no progress bar is shown — there's no reliable way to derive a percentage from remaining time alone. |
+| `progress_entity` | No | Entity holding progress as a 0-100 number; drives the progress bar directly. Without it, the bar is derived from `remaining_time_entity`/`finish_time_entity` instead (see below). |
 | `power_entity` | No | Entity holding current power draw (W) or energy. |
 | `door_entity` | No | Binary sensor for the door; `on` is treated as open. |
 | `door_open_color` | No | CSS color (name, hex, or `var(--...)`) used for the door row when open. Defaults to a warning color. |
 | `door_closed_color` | No | CSS color used for the door row when closed. Defaults to the theme's secondary text color. |
 | `name` | No | Overrides the displayed name. |
 | `icon` | No | Overrides the status-based icon. |
+| `display` | No | `full` (default, everything visible), `compact` (a single status-badge row), or `expandable` (starts compact, tap to reveal the full card). |
+| `tap_action` / `hold_action` | No | Standard [HA action config](https://www.home-assistant.io/dashboards/actions/) (`more-info`, `toggle`, `navigate`, `perform-action`, `url`, `none`). Ignored in `expandable` mode, where the tap is reserved for expanding/collapsing. |
 | `state_map` | No | Extends/overrides the default status → `{label, icon, color}` mapping. Matched case-insensitively; unmapped states fall back to a title-cased display of the raw state. |
+
+### The progress bar without a dedicated progress entity
+
+If you don't have a percentage sensor, the bar is derived from `remaining_time_entity` (or `finish_time_entity`): the card remembers the highest remaining-time reading it has seen since the machine started running as the 100% baseline, then fills the bar as `1 - current/baseline`. The baseline resets whenever the status returns to a resting state (idle/off/ready/finished/...), so the next wash cycle starts from a fresh 0%.
 
 ## Development
 

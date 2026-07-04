@@ -50,18 +50,24 @@ function titleCase(text) {
     .replace(/\w\S*/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
 }
 
+// Status keys considered "not running" — used to reset the derived progress
+// baseline (see _computeEffectiveRemainingMinutes) so a new cycle starts fresh.
+const RESTING_STATUS_KEYS = new Set([
+  "idle", "off", "inactive", "ready", "finish", "done", "complete", "abort", "unavailable", "unknown",
+]);
+
 function resolveState(rawState, overrides) {
   const merged = { ...DEFAULT_STATE_MAP, ...overrides };
   const normalized = rawState.toLowerCase();
 
-  if (merged[normalized]) return merged[normalized];
+  if (merged[normalized]) return { key: normalized, ...merged[normalized] };
 
   const matches = Object.keys(merged)
     .filter((key) => normalized.includes(key))
     .sort((a, b) => b.length - a.length);
-  if (matches.length > 0) return merged[matches[0]];
+  if (matches.length > 0) return { key: matches[0], ...merged[matches[0]] };
 
-  return { label: titleCase(rawState), icon: "mdi:washing-machine", color: "var(--primary-text-color)" };
+  return { key: null, label: titleCase(rawState), icon: "mdi:washing-machine", color: "var(--primary-text-color)" };
 }
 
 function toMinutes(value, unit) {
@@ -91,8 +97,12 @@ const STYLE = `
     --wmc-row-gap: 12px;
   }
   ha-card { padding: 16px; }
+  ha-card.compact { padding: 12px 16px; }
+  ha-card.clickable, .header.clickable { cursor: pointer; }
+  ha-card.clickable { transition: background 0.15s ease; }
+  ha-card.clickable:hover { background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.04); }
   .header { display: flex; align-items: center; gap: 16px; margin-bottom: var(--wmc-row-gap); }
-  .header ha-icon { --mdc-icon-size: var(--wmc-icon-size); color: var(--wmc-status-color, var(--wmc-secondary-color)); }
+  .header .status-icon { --mdc-icon-size: var(--wmc-icon-size); color: var(--wmc-status-color, var(--wmc-secondary-color)); }
   .header-text { display: flex; flex-direction: column; }
   .name { font-size: 16px; font-weight: 500; color: var(--wmc-text-color); }
   .status-label { font-size: 14px; color: var(--wmc-status-color, var(--wmc-secondary-color)); }
@@ -102,6 +112,13 @@ const STYLE = `
   .row .value { margin-left: auto; color: var(--wmc-secondary-color); }
   .progress-outer { width: 100%; height: 6px; border-radius: 3px; background: var(--divider-color, #e0e0e0); overflow: hidden; margin-top: 4px; }
   .progress-inner { height: 100%; background: var(--wmc-status-color, var(--primary-color)); transition: width 0.4s ease; }
+  .compact-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  .compact-left { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 auto; }
+  .compact-title { font-size: 1.05em; font-weight: 600; color: var(--wmc-text-color); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .status-badge { display: flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 16px; font-size: 0.85em; font-weight: 500; color: var(--wmc-text-color); background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06); flex: 0 0 auto; }
+  .status-badge ha-icon { --mdc-icon-size: 18px; color: var(--wmc-status-color, var(--wmc-secondary-color)); }
+  .expand-chevron { --mdc-icon-size: 20px; color: var(--wmc-secondary-color); flex: 0 0 auto; margin-left: auto; transition: transform 0.2s ease; }
+  .expand-chevron.expanded { transform: rotate(180deg); }
 `;
 
 class WashingMachineCard extends HTMLElement {
@@ -110,6 +127,8 @@ class WashingMachineCard extends HTMLElement {
     this.attachShadow({ mode: "open" });
     this._config = null;
     this._hass = null;
+    this._expanded = false;
+    this._progressBaseline = undefined;
   }
 
   setConfig(config) {
@@ -131,6 +150,7 @@ class WashingMachineCard extends HTMLElement {
 
   getCardSize() {
     if (!this._config) return 1;
+    if (this._isCompact()) return 1;
     const optionalRows = [
       this._config.program_entity || this._config.program_phase_entity,
       this._config.remaining_time_entity || this._config.finish_time_entity || this._config.progress_entity,
@@ -153,6 +173,90 @@ class WashingMachineCard extends HTMLElement {
       );
     });
     return { type: `custom:${CARD_TAG}`, status_entity: guess || "sensor.washing_machine_operation_state" };
+  }
+
+  // display: "compact" always collapses to the status-badge row; "expandable"
+  // starts collapsed and toggles open on tap; "full" (default) always shows everything.
+  _isCompact() {
+    if (this._config.display === "compact") return true;
+    if (this._config.display === "expandable") return !this._expanded;
+    return false;
+  }
+
+  _isExpandable() {
+    return this._config.display === "expandable";
+  }
+
+  _toggleExpanded() {
+    this._expanded = !this._expanded;
+    this._render();
+  }
+
+  // Dispatches HA's standard action event so tap_action/hold_action support the
+  // full action vocabulary (more-info/toggle/navigate/perform-action/...).
+  _fireAction(action) {
+    const actionKey = `${action}_action`;
+    if (!this._config[actionKey]) return;
+    this.dispatchEvent(
+      new CustomEvent("hass-action", { bubbles: true, composed: true, detail: { config: this._config, action } })
+    );
+  }
+
+  // In expandable mode the tap toggles expand/collapse (on the whole card when
+  // collapsed, on just the header once expanded, since the header is the part
+  // that stays present in both states); tap_action/hold_action are ignored
+  // while a card is expandable, matching the reserved gesture.
+  _wireCardActions(compact) {
+    const card = this.shadowRoot.querySelector("ha-card");
+    if (!card) return;
+
+    if (this._isExpandable()) {
+      const toggleTarget = compact ? card : this.shadowRoot.querySelector(".header");
+      if (toggleTarget) {
+        toggleTarget.classList.add("clickable");
+        toggleTarget.addEventListener("click", () => this._toggleExpanded());
+      }
+      return;
+    }
+
+    const hasTap = !!this._config.tap_action;
+    const hasHold = !!this._config.hold_action;
+    if (!hasTap && !hasHold) return;
+
+    card.classList.add("clickable");
+    if (hasTap) card.addEventListener("click", () => this._fireAction("tap"));
+    if (hasHold) {
+      let timer = null;
+      let held = false;
+      const start = () => {
+        held = false;
+        timer = setTimeout(() => {
+          held = true;
+          this._fireAction("hold");
+        }, 500);
+      };
+      const end = () => {
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
+      };
+      card.addEventListener("mousedown", start);
+      card.addEventListener("mouseup", end);
+      card.addEventListener("mouseleave", end);
+      card.addEventListener("touchstart", start, { passive: true });
+      card.addEventListener("touchend", end);
+      card.addEventListener(
+        "click",
+        (e) => {
+          if (held) {
+            e.stopImmediatePropagation();
+            held = false;
+          }
+        },
+        true
+      );
+    }
   }
 
   _row(icon, label, value, color) {
@@ -187,7 +291,38 @@ class WashingMachineCard extends HTMLElement {
     return undefined;
   }
 
-  _renderTiming() {
+  // Minutes remaining right now, from whichever source is configured: a direct
+  // remaining-time reading, or the gap to an absolute finish time.
+  _computeEffectiveRemainingMinutes(remaining, finish) {
+    if (remaining) {
+      const value = Number(remaining.state);
+      if (!Number.isNaN(value)) return toMinutes(value, remaining.attributes.unit_of_measurement || "min");
+    }
+    if (finish) {
+      const date = new Date(finish.state);
+      if (!Number.isNaN(date.getTime())) return (date.getTime() - Date.now()) / 60000;
+    }
+    return undefined;
+  }
+
+  // Without a dedicated progress_entity, derive a percentage from the remaining
+  // time itself: remember the highest remaining value seen since the machine
+  // started running as the 100% baseline, then progress = 1 - current/baseline.
+  // Resets whenever the status returns to a resting state (idle/off/finished/...)
+  // so the next cycle starts from a fresh baseline.
+  _computeDerivedProgress(statusKey, effectiveMinutes) {
+    if (RESTING_STATUS_KEYS.has(statusKey) || effectiveMinutes === undefined) {
+      this._progressBaseline = undefined;
+      return undefined;
+    }
+    if (this._progressBaseline === undefined || effectiveMinutes > this._progressBaseline) {
+      this._progressBaseline = effectiveMinutes;
+    }
+    if (!this._progressBaseline) return undefined;
+    return (1 - effectiveMinutes / this._progressBaseline) * 100;
+  }
+
+  _renderTiming(statusKey) {
     const cfg = this._config;
     if (!cfg.remaining_time_entity && !cfg.finish_time_entity && !cfg.progress_entity) return "";
 
@@ -201,8 +336,9 @@ class WashingMachineCard extends HTMLElement {
       : undefined;
     const finishLabel = this._computeFinishLabel(finish, remaining);
 
-    const progressValue = progress ? Number(progress.state) : NaN;
-    const showBar = !Number.isNaN(progressValue);
+    const effectiveMinutes = this._computeEffectiveRemainingMinutes(remaining, finish);
+    const progressValue = progress ? Number(progress.state) : this._computeDerivedProgress(statusKey, effectiveMinutes);
+    const showBar = typeof progressValue === "number" && !Number.isNaN(progressValue);
 
     let html = this._row(
       "mdi:progress-clock",
@@ -254,24 +390,52 @@ class WashingMachineCard extends HTMLElement {
     const name = escapeHtml(cfg.name || statusState.attributes.friendly_name || "Washing machine");
     const icon = cfg.icon || resolved.icon;
 
+    if (this._isCompact()) {
+      this._renderCompact(resolved, name, icon);
+      return;
+    }
+
+    const expandable = this._isExpandable();
     this.shadowRoot.innerHTML = `
       <style>${STYLE}</style>
       <ha-card style="--wmc-status-color: ${resolved.color}">
         <div class="header">
-          <ha-icon icon="${icon}"></ha-icon>
+          <ha-icon class="status-icon" icon="${icon}"></ha-icon>
           <div class="header-text">
             <span class="name">${name}</span>
             <span class="status-label">${escapeHtml(resolved.label)}</span>
           </div>
+          ${expandable ? '<ha-icon class="expand-chevron expanded" icon="mdi:chevron-down"></ha-icon>' : ""}
         </div>
         <div class="rows">
           ${this._renderProgram()}
-          ${this._renderTiming()}
+          ${this._renderTiming(resolved.key)}
           ${this._renderPower()}
           ${this._renderDoor()}
         </div>
       </ha-card>
     `;
+    this._wireCardActions(false);
+  }
+
+  _renderCompact(resolved, name, icon) {
+    const expandable = this._isExpandable();
+    this.shadowRoot.innerHTML = `
+      <style>${STYLE}</style>
+      <ha-card class="compact">
+        <div class="compact-row">
+          <span class="compact-left">
+            ${expandable ? '<ha-icon class="expand-chevron" icon="mdi:chevron-down"></ha-icon>' : ""}
+            <span class="compact-title">${name}</span>
+          </span>
+          <div class="status-badge" style="--wmc-status-color: ${resolved.color}">
+            <ha-icon icon="${icon}"></ha-icon>
+            <span>${escapeHtml(resolved.label)}</span>
+          </div>
+        </div>
+      </ha-card>
+    `;
+    this._wireCardActions(true);
   }
 }
 
@@ -313,6 +477,21 @@ if (LitElement && !customElements.get(EDITOR_TAG)) {
     { name: "door_closed_color", selector: { text: {} } },
     { name: "name", selector: { text: {} } },
     { name: "icon", selector: { icon: {} } },
+    {
+      name: "display",
+      selector: {
+        select: {
+          mode: "dropdown",
+          options: [
+            { value: "full", label: "Full (all details)" },
+            { value: "compact", label: "Compact (status badge only)" },
+            { value: "expandable", label: "Expandable (compact, tap to expand)" },
+          ],
+        },
+      },
+    },
+    { name: "tap_action", selector: { ui_action: {} } },
+    { name: "hold_action", selector: { ui_action: {} } },
   ];
 
   const LABELS = {
@@ -328,6 +507,9 @@ if (LitElement && !customElements.get(EDITOR_TAG)) {
     door_closed_color: "Door closed color (optional)",
     name: "Name (optional)",
     icon: "Icon (optional)",
+    display: "Display mode",
+    tap_action: "Tap action (optional)",
+    hold_action: "Hold action (optional)",
   };
 
   class WashingMachineCardEditor extends LitElement {
