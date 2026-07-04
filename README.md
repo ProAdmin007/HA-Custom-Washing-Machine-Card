@@ -67,7 +67,7 @@ state_map:                                           # optional, extend/override
 | `finish_time_entity` | No | Entity holding an absolute finish datetime. If omitted but `remaining_time_entity` is set, the finish time is estimated as now + remaining time. |
 | `progress_entity` | No | Entity holding progress as a 0-100 number; drives the progress bar directly. Without it, the bar is derived from `remaining_time_entity`/`finish_time_entity` instead (see below). |
 | `power_entity` | No | Entity holding current power draw (W) or energy. |
-| `door_entity` | No | Binary sensor for the door; `on` is treated as open. |
+| `door_entity` | No | Sensor for the door. Works with a `binary_sensor` (`on` = open) or a plain `sensor` with a text state containing "open"/"ajar"; anything else is treated as closed. |
 | `door_open_color` | No | CSS color (name, hex, or `var(--...)`) used for the door row when open. Defaults to a warning color. |
 | `door_closed_color` | No | CSS color used for the door row when closed. Defaults to the theme's secondary text color. |
 | `name` | No | Overrides the displayed name. |
@@ -79,6 +79,27 @@ state_map:                                           # optional, extend/override
 ### The progress bar without a dedicated progress entity
 
 If you don't have a percentage sensor, the bar is derived from `remaining_time_entity` (or `finish_time_entity`): the card remembers the highest remaining-time reading it has seen since the machine started running as the 100% baseline, then fills the bar as `1 - current/baseline`. The baseline resets whenever the status returns to a resting state (idle/off/ready/finished/...), so the next wash cycle starts from a fresh 0%.
+
+### Real-world example: AEG (Home Connect-style integration)
+
+An AEG washing machine integrated via a Home Connect-style integration (entities named `sensor.aeg_wasmachine_*` / `select.aeg_wasmachine_*`), plus a separate smart plug for power:
+
+```yaml
+type: custom:washing-machine-card
+status_entity: sensor.aeg_wasmachine_appliancestate
+program_entity: select.aeg_wasmachine_userselections_programuid
+program_phase_entity: sensor.aeg_wasmachine_cyclephase
+remaining_time_entity: sensor.aeg_wasmachine_timetoend
+power_entity: sensor.wasmachine_vermogen
+door_entity: binary_sensor.aeg_wasmachine_doorstate
+```
+
+A few things this example illustrates:
+
+- `program_entity` doesn't have to be a `sensor` — a `select` entity holding the currently active program (as many integrations expose it) works just as well.
+- Prefer a `sensor` with `device_class: duration` (here `sensor.aeg_wasmachine_timetoend`) for `remaining_time_entity` over a vaguely-named "finish in" sensor without a unit — check each candidate's attributes in **Developer Tools → States** before picking one.
+- No dedicated `progress_entity` or `finish_time_entity` was available here, so the progress bar and finish-time estimate are both derived automatically from `remaining_time_entity` (see above).
+- `power_entity` can point at any external power sensor (e.g. a smart plug) — it doesn't need to come from the same integration as the rest.
 
 ## Development
 

@@ -85,6 +85,16 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// Some integrations expose the door as a binary_sensor ("on"/"off"), others as
+// a plain sensor with a native-language text state (e.g. "Open"/"Dicht"). Only
+// explicit "open" wording (or "on") counts as open; anything else — including
+// unrecognized text — is treated as closed, which is the safer default.
+function isDoorOpenState(state) {
+  const normalized = String(state).toLowerCase();
+  if (normalized === "on") return true;
+  return normalized.includes("open") || normalized.includes("ajar");
+}
+
 // ============================================
 // CARD
 // ============================================
@@ -366,7 +376,7 @@ class WashingMachineCard extends HTMLElement {
     if (!cfg.door_entity) return "";
     const entity = this._hass.states[cfg.door_entity];
     if (!entity) return "";
-    const isOpen = entity.state === "on";
+    const isOpen = isDoorOpenState(entity.state);
     const color = isOpen ? cfg.door_open_color || "var(--warning-color, orange)" : cfg.door_closed_color || "var(--wmc-secondary-color)";
     return this._row(isOpen ? "mdi:door-open" : "mdi:door-closed", "Door", isOpen ? "Open" : "Closed", color);
   }
