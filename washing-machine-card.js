@@ -77,8 +77,12 @@ function toMinutes(value, unit) {
   return value; // assume minutes by default
 }
 
-function formatTime(date) {
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+// use24Hour: true forces 24-hour time, false forces 12-hour AM/PM, undefined
+// leaves it to the browser's locale default.
+function formatTime(date, use24Hour) {
+  const options = { hour: "2-digit", minute: "2-digit" };
+  if (typeof use24Hour === "boolean") options.hour12 = !use24Hour;
+  return date.toLocaleTimeString([], options);
 }
 
 function escapeHtml(value) {
@@ -111,23 +115,31 @@ const STYLE = `
   ha-card.clickable, .header.clickable { cursor: pointer; }
   ha-card.clickable { transition: background 0.15s ease; }
   ha-card.clickable:hover { background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.04); }
-  .header { display: flex; align-items: center; gap: 16px; margin-bottom: var(--wmc-row-gap); }
-  .header .status-icon { --mdc-icon-size: var(--wmc-icon-size); color: var(--wmc-status-color, var(--wmc-secondary-color)); }
-  .header-text { display: flex; flex-direction: column; }
+  .header { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
+  .icon-badge { width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex: 0 0 auto; background: color-mix(in srgb, var(--wmc-status-color, var(--wmc-secondary-color)) 18%, transparent); }
+  .icon-badge .status-icon { --mdc-icon-size: 24px; color: var(--wmc-status-color, var(--wmc-secondary-color)); }
+  .header-text { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; }
   .name { font-size: 16px; font-weight: 500; color: var(--wmc-text-color); }
   .status-label { font-size: 14px; color: var(--wmc-status-color, var(--wmc-secondary-color)); }
+  .time-stat { display: flex; flex-direction: column; align-items: flex-end; text-align: right; flex: 0 0 auto; }
+  .time-stat .time-label { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--wmc-secondary-color); }
+  .time-stat .time-label ha-icon { --mdc-icon-size: 14px; }
+  .time-stat .time-value { font-size: 18px; font-weight: 600; color: var(--wmc-status-color, var(--wmc-text-color)); }
   .rows { display: flex; flex-direction: column; gap: 8px; }
   .row { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--wmc-text-color); }
   .row ha-icon { --mdc-icon-size: 20px; color: var(--wmc-secondary-color); }
   .row .value { margin-left: auto; color: var(--wmc-secondary-color); }
-  .progress-outer { width: 100%; height: 6px; border-radius: 3px; background: var(--divider-color, #e0e0e0); overflow: hidden; margin-top: 4px; }
+  .progress-outer { width: 100%; height: 6px; border-radius: 3px; background: var(--divider-color, #e0e0e0); overflow: hidden; margin: 4px 0 12px; }
   .progress-inner { height: 100%; background: var(--wmc-status-color, var(--primary-color)); transition: width 0.4s ease; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { display: flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 12px; background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06); font-size: 12px; color: var(--wmc-secondary-color); }
+  .chip ha-icon { --mdc-icon-size: 14px; color: inherit; }
   .compact-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
   .compact-left { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 auto; }
   .compact-title { font-size: 1.05em; font-weight: 600; color: var(--wmc-text-color); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .status-badge { display: flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 16px; font-size: 0.85em; font-weight: 500; color: var(--wmc-text-color); background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06); flex: 0 0 auto; }
   .status-badge ha-icon { --mdc-icon-size: 18px; color: var(--wmc-status-color, var(--wmc-secondary-color)); }
-  .expand-chevron { --mdc-icon-size: 20px; color: var(--wmc-secondary-color); flex: 0 0 auto; margin-left: auto; transition: transform 0.2s ease; }
+  .expand-chevron { --mdc-icon-size: 20px; color: var(--wmc-secondary-color); flex: 0 0 auto; transition: transform 0.2s ease; }
   .expand-chevron.expanded { transform: rotate(180deg); }
 `;
 
@@ -269,33 +281,35 @@ class WashingMachineCard extends HTMLElement {
     }
   }
 
-  _row(icon, label, value, color) {
+  _chip(icon, label, color) {
     const style = color ? ` style="color:${color}"` : "";
-    return `<div class="row"${style}><ha-icon icon="${icon}"${style}></ha-icon><span>${label}</span>${
-      value !== undefined ? `<span class="value"${style}>${value}</span>` : ""
-    }</div>`;
+    return `<div class="chip"${style}><ha-icon icon="${icon}"${style}></ha-icon><span>${label}</span></div>`;
   }
 
-  _renderProgram() {
+  _renderProgramChip() {
     const cfg = this._config;
     if (!cfg.program_entity && !cfg.program_phase_entity) return "";
     const program = cfg.program_entity ? this._hass.states[cfg.program_entity] : undefined;
     const phase = cfg.program_phase_entity ? this._hass.states[cfg.program_phase_entity] : undefined;
     const label = [program?.state, phase?.state].filter(Boolean).map(escapeHtml).join(" · ");
     if (!label) return "";
-    return this._row("mdi:washing-machine", label);
+    return this._chip("mdi:playlist-play", label);
   }
 
+  // Formats the finish time alone (no "Ends"/"~" wording context — that's implied
+  // by where it's rendered): a real finish_time_entity is exact, a value derived
+  // from remaining_time_entity is prefixed with "~" since it's an estimate.
   _computeFinishLabel(finish, remaining) {
+    const use24Hour = this._config.time_format_24h;
     if (finish) {
       const date = new Date(finish.state);
-      if (!Number.isNaN(date.getTime())) return `Ends ${formatTime(date)}`;
+      if (!Number.isNaN(date.getTime())) return formatTime(date, use24Hour);
     }
     if (remaining) {
       const value = Number(remaining.state);
       if (!Number.isNaN(value)) {
         const minutes = toMinutes(value, remaining.attributes.unit_of_measurement || "min");
-        return `~${formatTime(new Date(Date.now() + minutes * 60000))}`;
+        return `~${formatTime(new Date(Date.now() + minutes * 60000), use24Hour)}`;
       }
     }
     return undefined;
@@ -332,53 +346,66 @@ class WashingMachineCard extends HTMLElement {
     return (1 - effectiveMinutes / this._progressBaseline) * 100;
   }
 
-  _renderTiming(statusKey) {
+  // Gathers everything time/progress related once per render, shared by the
+  // header's "Time left" stat, the progress bar, and the end-time chip.
+  _computeTimeInfo(statusKey) {
     const cfg = this._config;
-    if (!cfg.remaining_time_entity && !cfg.finish_time_entity && !cfg.progress_entity) return "";
+    if (!cfg.remaining_time_entity && !cfg.finish_time_entity && !cfg.progress_entity) return null;
 
     const remaining = cfg.remaining_time_entity ? this._hass.states[cfg.remaining_time_entity] : undefined;
     const finish = cfg.finish_time_entity ? this._hass.states[cfg.finish_time_entity] : undefined;
     const progress = cfg.progress_entity ? this._hass.states[cfg.progress_entity] : undefined;
-    if (!remaining && !finish && !progress) return "";
+    if (!remaining && !finish && !progress) return null;
 
     const remainingLabel = remaining
       ? escapeHtml(`${remaining.state} ${remaining.attributes.unit_of_measurement || ""}`.trim())
       : undefined;
-    const finishLabel = this._computeFinishLabel(finish, remaining);
-
+    const endLabel = this._computeFinishLabel(finish, remaining);
     const effectiveMinutes = this._computeEffectiveRemainingMinutes(remaining, finish);
     const progressValue = progress ? Number(progress.state) : this._computeDerivedProgress(statusKey, effectiveMinutes);
-    const showBar = typeof progressValue === "number" && !Number.isNaN(progressValue);
 
-    let html = this._row(
-      "mdi:progress-clock",
-      remainingLabel || finishLabel || "Timing",
-      remainingLabel && finishLabel ? finishLabel : undefined
-    );
-    if (showBar) {
-      const pct = Math.min(100, Math.max(0, progressValue));
-      html += `<div class="progress-outer"><div class="progress-inner" style="width:${pct}%"></div></div>`;
-    }
-    return html;
+    return { remainingLabel, endLabel, progressValue };
   }
 
-  _renderPower() {
+  _renderTimeStat(timeInfo) {
+    if (!timeInfo || !timeInfo.remainingLabel) return "";
+    return `
+      <div class="time-stat">
+        <span class="time-label"><ha-icon icon="mdi:timer-outline"></ha-icon>Time left</span>
+        <span class="time-value">${timeInfo.remainingLabel}</span>
+      </div>
+    `;
+  }
+
+  _renderBar(timeInfo) {
+    const progressValue = timeInfo?.progressValue;
+    if (typeof progressValue !== "number" || Number.isNaN(progressValue)) return "";
+    const pct = Math.min(100, Math.max(0, progressValue));
+    return `<div class="progress-outer"><div class="progress-inner" style="width:${pct}%"></div></div>`;
+  }
+
+  _renderEndChip(timeInfo) {
+    if (!timeInfo || !timeInfo.endLabel) return "";
+    return this._chip("mdi:clock-end", timeInfo.endLabel);
+  }
+
+  _renderPowerChip() {
     const cfg = this._config;
     if (!cfg.power_entity) return "";
     const entity = this._hass.states[cfg.power_entity];
     if (!entity) return "";
     const unit = entity.attributes.unit_of_measurement || "W";
-    return this._row("mdi:flash", "Power", escapeHtml(`${entity.state} ${unit}`));
+    return this._chip("mdi:flash", escapeHtml(`${entity.state} ${unit}`));
   }
 
-  _renderDoor() {
+  _renderDoorChip() {
     const cfg = this._config;
     if (!cfg.door_entity) return "";
     const entity = this._hass.states[cfg.door_entity];
     if (!entity) return "";
     const isOpen = isDoorOpenState(entity.state);
     const color = isOpen ? cfg.door_open_color || "var(--warning-color, orange)" : cfg.door_closed_color || "var(--wmc-secondary-color)";
-    return this._row(isOpen ? "mdi:door-open" : "mdi:door-closed", "Door", isOpen ? "Open" : "Closed", color);
+    return this._chip(isOpen ? "mdi:door-open" : "mdi:door-closed", isOpen ? "Open" : "Closed", color);
   }
 
   _render() {
@@ -406,23 +433,25 @@ class WashingMachineCard extends HTMLElement {
     }
 
     const expandable = this._isExpandable();
+    const timeInfo = this._computeTimeInfo(resolved.key);
+    const chips = [this._renderProgramChip(), this._renderEndChip(timeInfo), this._renderPowerChip(), this._renderDoorChip()]
+      .filter(Boolean)
+      .join("");
+
     this.shadowRoot.innerHTML = `
       <style>${STYLE}</style>
       <ha-card style="--wmc-status-color: ${resolved.color}">
         <div class="header">
-          <ha-icon class="status-icon" icon="${icon}"></ha-icon>
+          <div class="icon-badge"><ha-icon class="status-icon" icon="${icon}"></ha-icon></div>
           <div class="header-text">
             <span class="name">${name}</span>
             <span class="status-label">${escapeHtml(resolved.label)}</span>
           </div>
+          ${this._renderTimeStat(timeInfo)}
           ${expandable ? '<ha-icon class="expand-chevron expanded" icon="mdi:chevron-down"></ha-icon>' : ""}
         </div>
-        <div class="rows">
-          ${this._renderProgram()}
-          ${this._renderTiming(resolved.key)}
-          ${this._renderPower()}
-          ${this._renderDoor()}
-        </div>
+        ${this._renderBar(timeInfo)}
+        ${chips ? `<div class="chips">${chips}</div>` : ""}
       </ha-card>
     `;
     this._wireCardActions(false);
@@ -487,6 +516,7 @@ if (LitElement && !customElements.get(EDITOR_TAG)) {
     { name: "door_closed_color", selector: { text: {} } },
     { name: "name", selector: { text: {} } },
     { name: "icon", selector: { icon: {} } },
+    { name: "time_format_24h", selector: { boolean: {} } },
     {
       name: "display",
       selector: {
@@ -517,6 +547,7 @@ if (LitElement && !customElements.get(EDITOR_TAG)) {
     door_closed_color: "Door closed color (optional)",
     name: "Name (optional)",
     icon: "Icon (optional)",
+    time_format_24h: "Use 24-hour time (off = AM/PM)",
     display: "Display mode",
     tap_action: "Tap action (optional)",
     hold_action: "Hold action (optional)",

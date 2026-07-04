@@ -4,16 +4,17 @@ A simple, easily customizable [Home Assistant](https://www.home-assistant.io/) L
 
 ## Features
 
-- Status header with icon and label (running / paused / finished / error / ...)
-- Optional program + current program phase/step row (e.g. "Cotton 40 · Rinsing")
-- Optional remaining time, finish time and progress bar showing how much longer the wash needs — the bar works even without a dedicated progress-percentage entity, by tracking the highest remaining-time reading seen since the cycle started as its 100% baseline
-- Optional power consumption row
-- Optional door open/closed row, with separately configurable colors for each state
-- Rows for entities you don't configure are simply omitted — no errors, no empty placeholders
+- Header with a colored status icon badge, name, status label, and a right-aligned "Time left" stat
+- A progress bar directly under the header showing how much longer the wash needs — works even without a dedicated progress-percentage entity, by tracking the highest remaining-time reading seen since the cycle started as its 100% baseline
+- Program + current program phase/step, power consumption, and door open/closed shown as a row of compact chips below the bar (e.g. "Cotton 40 · Rinsing", "180 W", "Closed") — chips for entities you don't configure are simply omitted, no errors or empty placeholders
+- Door chip color is separately configurable for open vs. closed
 - Status label/icon/color mapping works across vendors out of the box, with an optional `state_map` override for vendor-specific state strings
-- Three display modes: full (default), compact (a single status-badge row, in the style of the [air-quality-card](https://github.com/KadenThomp36/air-quality-card)), or expandable (compact, tap to reveal the full card)
+- Three display modes: full (default), compact (a single status-badge row), or expandable (compact, tap to reveal the full card)
 - Optional `tap_action`/`hold_action` (more-info, toggle, navigate, ...), using Home Assistant's standard action vocabulary
+- Optional 24-hour/AM-PM toggle for all displayed times
 - Visual (GUI) editor, plus full YAML config
+
+The layout takes inspiration from two community cards: the header/chip/progress-bar composition from a Dutch multi-entity-row dashboard style, and the icon-badge + "time left" idea from [air-quality-card](https://github.com/KadenThomp36/air-quality-card)'s compact mode (which also inspired the compact/expandable display modes and the `tap_action`/`hold_action` handling, both described below).
 
 ## Installation
 
@@ -51,6 +52,7 @@ tap_action:                                          # optional, HA action confi
   action: more-info
 hold_action:                                         # optional, HA action config
   action: toggle
+time_format_24h: true                                # optional: true = 24h, false = AM/PM, unset = browser locale default
 state_map:                                           # optional, extend/override the default status mapping
   delayedstart:
     label: "Delayed start"
@@ -74,6 +76,7 @@ state_map:                                           # optional, extend/override
 | `icon` | No | Overrides the status-based icon. |
 | `display` | No | `full` (default, everything visible), `compact` (a single status-badge row), or `expandable` (starts compact, tap to reveal the full card). |
 | `tap_action` / `hold_action` | No | Standard [HA action config](https://www.home-assistant.io/dashboards/actions/) (`more-info`, `toggle`, `navigate`, `perform-action`, `url`, `none`). Ignored in `expandable` mode, where the tap is reserved for expanding/collapsing. |
+| `time_format_24h` | No | `true` forces 24-hour time, `false` forces 12-hour AM/PM, unset uses the browser's locale default. |
 | `state_map` | No | Extends/overrides the default status → `{label, icon, color}` mapping. Matched case-insensitively; unmapped states fall back to a title-cased display of the raw state. |
 
 ### The progress bar without a dedicated progress entity
