@@ -1,0 +1,364 @@
+/**
+ * Washing Machine Card
+ * A simple, easily customizable Home Assistant Lovelace card for a washing machine.
+ * Vanilla JS, no build step: edit this file directly and reload the browser.
+ *
+ * https://github.com/ProAdmin007/HA-Custom-Washing-Machine-Card
+ */
+
+const CARD_TAG = "washing-machine-card";
+const EDITOR_TAG = "washing-machine-card-editor";
+
+// ============================================
+// STATUS MAPPING
+// Vendor/integration status strings vary (Home Connect's "Run"/"Finished", others
+// differ), so raw states are matched case-insensitively by substring against this
+// table rather than hardcoding one vendor's vocabulary. Unmapped states fall back
+// to a title-cased display of the raw string instead of erroring.
+// ============================================
+
+const DEFAULT_STATE_MAP = {
+  run: { label: "Running", icon: "mdi:washing-machine", color: "var(--state-active-color, var(--primary-color))" },
+  wash: { label: "Running", icon: "mdi:washing-machine", color: "var(--state-active-color, var(--primary-color))" },
+  spin: { label: "Spinning", icon: "mdi:washing-machine", color: "var(--state-active-color, var(--primary-color))" },
+  rinse: { label: "Rinsing", icon: "mdi:washing-machine", color: "var(--state-active-color, var(--primary-color))" },
+  delayedstart: { label: "Delayed start", icon: "mdi:clock-outline", color: "var(--secondary-text-color)" },
+  delayed_start: { label: "Delayed start", icon: "mdi:clock-outline", color: "var(--secondary-text-color)" },
+  pause: { label: "Paused", icon: "mdi:pause-circle-outline", color: "var(--secondary-text-color)" },
+  actionrequired: { label: "Action required", icon: "mdi:alert-circle-outline", color: "var(--warning-color, orange)" },
+  action_required: { label: "Action required", icon: "mdi:alert-circle-outline", color: "var(--warning-color, orange)" },
+  error: { label: "Error", icon: "mdi:alert-circle", color: "var(--error-color, red)" },
+  fail: { label: "Error", icon: "mdi:alert-circle", color: "var(--error-color, red)" },
+  abort: { label: "Aborted", icon: "mdi:stop-circle-outline", color: "var(--secondary-text-color)" },
+  finish: { label: "Finished", icon: "mdi:check-circle-outline", color: "var(--success-color, green)" },
+  done: { label: "Finished", icon: "mdi:check-circle-outline", color: "var(--success-color, green)" },
+  complete: { label: "Finished", icon: "mdi:check-circle-outline", color: "var(--success-color, green)" },
+  ready: { label: "Ready", icon: "mdi:washing-machine", color: "var(--secondary-text-color)" },
+  idle: { label: "Idle", icon: "mdi:washing-machine", color: "var(--secondary-text-color)" },
+  off: { label: "Off", icon: "mdi:washing-machine-off", color: "var(--secondary-text-color)" },
+  inactive: { label: "Off", icon: "mdi:washing-machine-off", color: "var(--secondary-text-color)" },
+  unavailable: { label: "Unavailable", icon: "mdi:help-circle-outline", color: "var(--disabled-text-color)" },
+  unknown: { label: "Unknown", icon: "mdi:help-circle-outline", color: "var(--disabled-text-color)" },
+};
+
+function titleCase(text) {
+  return text
+    .replace(/[_-]+/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\w\S*/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+}
+
+function resolveState(rawState, overrides) {
+  const merged = { ...DEFAULT_STATE_MAP, ...overrides };
+  const normalized = rawState.toLowerCase();
+
+  if (merged[normalized]) return merged[normalized];
+
+  const matches = Object.keys(merged)
+    .filter((key) => normalized.includes(key))
+    .sort((a, b) => b.length - a.length);
+  if (matches.length > 0) return merged[matches[0]];
+
+  return { label: titleCase(rawState), icon: "mdi:washing-machine", color: "var(--primary-text-color)" };
+}
+
+function toMinutes(value, unit) {
+  const u = String(unit).toLowerCase();
+  if (u.startsWith("h")) return value * 60;
+  if (u.startsWith("s")) return value / 60;
+  return value; // assume minutes by default
+}
+
+function formatTime(date) {
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// ============================================
+// CARD
+// ============================================
+
+const STYLE = `
+  :host {
+    --wmc-icon-size: 40px;
+    --wmc-text-color: var(--primary-text-color);
+    --wmc-secondary-color: var(--secondary-text-color);
+    --wmc-row-gap: 12px;
+  }
+  ha-card { padding: 16px; }
+  .header { display: flex; align-items: center; gap: 16px; margin-bottom: var(--wmc-row-gap); }
+  .header ha-icon { --mdc-icon-size: var(--wmc-icon-size); color: var(--wmc-status-color, var(--wmc-secondary-color)); }
+  .header-text { display: flex; flex-direction: column; }
+  .name { font-size: 16px; font-weight: 500; color: var(--wmc-text-color); }
+  .status-label { font-size: 14px; color: var(--wmc-status-color, var(--wmc-secondary-color)); }
+  .rows { display: flex; flex-direction: column; gap: 8px; }
+  .row { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--wmc-text-color); }
+  .row ha-icon { --mdc-icon-size: 20px; color: var(--wmc-secondary-color); }
+  .row .value { margin-left: auto; color: var(--wmc-secondary-color); }
+  .progress-outer { width: 100%; height: 6px; border-radius: 3px; background: var(--divider-color, #e0e0e0); overflow: hidden; margin-top: 4px; }
+  .progress-inner { height: 100%; background: var(--wmc-status-color, var(--primary-color)); transition: width 0.4s ease; }
+`;
+
+class WashingMachineCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._config = null;
+    this._hass = null;
+  }
+
+  setConfig(config) {
+    if (!config || !config.status_entity) {
+      throw new Error("You must set a status_entity (e.g. an operation-state sensor for your washing machine).");
+    }
+    this._config = config;
+    this._render();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    this._render();
+  }
+
+  get hass() {
+    return this._hass;
+  }
+
+  getCardSize() {
+    if (!this._config) return 1;
+    const optionalRows = [
+      this._config.program_entity || this._config.program_phase_entity,
+      this._config.remaining_time_entity || this._config.finish_time_entity || this._config.progress_entity,
+      this._config.power_entity,
+      this._config.door_entity,
+    ].filter(Boolean).length;
+    return 2 + optionalRows;
+  }
+
+  static getConfigElement() {
+    return document.createElement(EDITOR_TAG);
+  }
+
+  static getStubConfig(hass) {
+    const guess = Object.keys(hass.states).find((id) => {
+      const lower = id.toLowerCase();
+      return (
+        (id.startsWith("sensor.") || id.startsWith("binary_sensor.")) &&
+        (lower.includes("wash") || lower.includes("wasmachine") || lower.includes("laundry"))
+      );
+    });
+    return { type: `custom:${CARD_TAG}`, status_entity: guess || "sensor.washing_machine_operation_state" };
+  }
+
+  _row(icon, label, value, color) {
+    const style = color ? ` style="color:${color}"` : "";
+    return `<div class="row"${style}><ha-icon icon="${icon}"${style}></ha-icon><span>${label}</span>${
+      value !== undefined ? `<span class="value"${style}>${value}</span>` : ""
+    }</div>`;
+  }
+
+  _renderProgram() {
+    const cfg = this._config;
+    if (!cfg.program_entity && !cfg.program_phase_entity) return "";
+    const program = cfg.program_entity ? this._hass.states[cfg.program_entity] : undefined;
+    const phase = cfg.program_phase_entity ? this._hass.states[cfg.program_phase_entity] : undefined;
+    const label = [program?.state, phase?.state].filter(Boolean).map(escapeHtml).join(" · ");
+    if (!label) return "";
+    return this._row("mdi:washing-machine", label);
+  }
+
+  _computeFinishLabel(finish, remaining) {
+    if (finish) {
+      const date = new Date(finish.state);
+      if (!Number.isNaN(date.getTime())) return `Ends ${formatTime(date)}`;
+    }
+    if (remaining) {
+      const value = Number(remaining.state);
+      if (!Number.isNaN(value)) {
+        const minutes = toMinutes(value, remaining.attributes.unit_of_measurement || "min");
+        return `~${formatTime(new Date(Date.now() + minutes * 60000))}`;
+      }
+    }
+    return undefined;
+  }
+
+  _renderTiming() {
+    const cfg = this._config;
+    if (!cfg.remaining_time_entity && !cfg.finish_time_entity && !cfg.progress_entity) return "";
+
+    const remaining = cfg.remaining_time_entity ? this._hass.states[cfg.remaining_time_entity] : undefined;
+    const finish = cfg.finish_time_entity ? this._hass.states[cfg.finish_time_entity] : undefined;
+    const progress = cfg.progress_entity ? this._hass.states[cfg.progress_entity] : undefined;
+    if (!remaining && !finish && !progress) return "";
+
+    const remainingLabel = remaining
+      ? escapeHtml(`${remaining.state} ${remaining.attributes.unit_of_measurement || ""}`.trim())
+      : undefined;
+    const finishLabel = this._computeFinishLabel(finish, remaining);
+
+    const progressValue = progress ? Number(progress.state) : NaN;
+    const showBar = !Number.isNaN(progressValue);
+
+    let html = this._row(
+      "mdi:progress-clock",
+      remainingLabel || finishLabel || "Timing",
+      remainingLabel && finishLabel ? finishLabel : undefined
+    );
+    if (showBar) {
+      const pct = Math.min(100, Math.max(0, progressValue));
+      html += `<div class="progress-outer"><div class="progress-inner" style="width:${pct}%"></div></div>`;
+    }
+    return html;
+  }
+
+  _renderPower() {
+    const cfg = this._config;
+    if (!cfg.power_entity) return "";
+    const entity = this._hass.states[cfg.power_entity];
+    if (!entity) return "";
+    const unit = entity.attributes.unit_of_measurement || "W";
+    return this._row("mdi:flash", "Power", escapeHtml(`${entity.state} ${unit}`));
+  }
+
+  _renderDoor() {
+    const cfg = this._config;
+    if (!cfg.door_entity) return "";
+    const entity = this._hass.states[cfg.door_entity];
+    if (!entity) return "";
+    const isOpen = entity.state === "on";
+    const color = isOpen ? cfg.door_open_color || "var(--warning-color, orange)" : cfg.door_closed_color || "var(--wmc-secondary-color)";
+    return this._row(isOpen ? "mdi:door-open" : "mdi:door-closed", "Door", isOpen ? "Open" : "Closed", color);
+  }
+
+  _render() {
+    if (!this._config || !this._hass) {
+      this.shadowRoot.innerHTML = "";
+      return;
+    }
+
+    const cfg = this._config;
+    const statusState = this._hass.states[cfg.status_entity];
+    if (!statusState) {
+      this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card><div class="rows"><div class="row">Entity not found: ${escapeHtml(
+        cfg.status_entity
+      )}</div></div></ha-card>`;
+      return;
+    }
+
+    const resolved = resolveState(statusState.state, cfg.state_map);
+    const name = escapeHtml(cfg.name || statusState.attributes.friendly_name || "Washing machine");
+    const icon = cfg.icon || resolved.icon;
+
+    this.shadowRoot.innerHTML = `
+      <style>${STYLE}</style>
+      <ha-card style="--wmc-status-color: ${resolved.color}">
+        <div class="header">
+          <ha-icon icon="${icon}"></ha-icon>
+          <div class="header-text">
+            <span class="name">${name}</span>
+            <span class="status-label">${escapeHtml(resolved.label)}</span>
+          </div>
+        </div>
+        <div class="rows">
+          ${this._renderProgram()}
+          ${this._renderTiming()}
+          ${this._renderPower()}
+          ${this._renderDoor()}
+        </div>
+      </ha-card>
+    `;
+  }
+}
+
+customElements.define(CARD_TAG, WashingMachineCard);
+
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: CARD_TAG,
+  name: "Washing Machine Card",
+  description: "A simple, easily customizable card for a washing machine's status, program, power and door state.",
+});
+
+// ============================================
+// VISUAL CONFIGURATION EDITOR
+// Home Assistant's own frontend already loads Lit for its internal components, so
+// rather than bundling Lit as a dependency, we borrow the already-loaded LitElement
+// via an internal HA element's prototype chain. This gives us <ha-form> (which needs
+// a Lit-compatible host) for free, with zero build step and zero dependencies.
+// Outside a real HA frontend (e.g. a plain test harness) this lookup fails and the
+// editor simply isn't registered; YAML configuration still works everywhere.
+// ============================================
+
+const _haViewElement = customElements.get("hui-masonry-view") || customElements.get("hui-view");
+const LitElement = _haViewElement ? Object.getPrototypeOf(_haViewElement) : undefined;
+
+if (LitElement && !customElements.get(EDITOR_TAG)) {
+  const html = LitElement.prototype.html;
+
+  const SCHEMA = [
+    { name: "status_entity", required: true, selector: { entity: {} } },
+    { name: "program_entity", selector: { entity: {} } },
+    { name: "program_phase_entity", selector: { entity: {} } },
+    { name: "remaining_time_entity", selector: { entity: {} } },
+    { name: "finish_time_entity", selector: { entity: {} } },
+    { name: "progress_entity", selector: { entity: {} } },
+    { name: "power_entity", selector: { entity: { domain: ["sensor"] } } },
+    { name: "door_entity", selector: { entity: { domain: ["binary_sensor"] } } },
+    { name: "door_open_color", selector: { text: {} } },
+    { name: "door_closed_color", selector: { text: {} } },
+    { name: "name", selector: { text: {} } },
+    { name: "icon", selector: { icon: {} } },
+  ];
+
+  const LABELS = {
+    status_entity: "Status entity",
+    program_entity: "Program entity (optional)",
+    program_phase_entity: "Program phase/step entity (optional)",
+    remaining_time_entity: "Remaining time entity (optional)",
+    finish_time_entity: "Finish time entity (optional)",
+    progress_entity: "Progress % entity (optional)",
+    power_entity: "Power entity (optional)",
+    door_entity: "Door entity (optional)",
+    door_open_color: "Door open color (optional, e.g. red or var(--error-color))",
+    door_closed_color: "Door closed color (optional)",
+    name: "Name (optional)",
+    icon: "Icon (optional)",
+  };
+
+  class WashingMachineCardEditor extends LitElement {
+    static get properties() {
+      return { hass: { type: Object }, _config: { type: Object } };
+    }
+
+    setConfig(config) {
+      this._config = config;
+    }
+
+    _computeLabel = (schema) => LABELS[schema.name] || schema.name;
+
+    _valueChanged(ev) {
+      ev.stopPropagation();
+      this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: ev.detail.value }, bubbles: true, composed: true }));
+    }
+
+    render() {
+      if (!this.hass || !this._config) return html``;
+      return html`
+        <ha-form
+          .hass=${this.hass}
+          .data=${this._config}
+          .schema=${SCHEMA}
+          .computeLabel=${this._computeLabel}
+          @value-changed=${this._valueChanged}
+        ></ha-form>
+      `;
+    }
+  }
+
+  customElements.define(EDITOR_TAG, WashingMachineCardEditor);
+}

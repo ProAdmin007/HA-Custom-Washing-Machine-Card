@@ -23,7 +23,7 @@ A simple, easily customizable [Home Assistant](https://www.home-assistant.io/) L
 
 ### Manual
 
-1. Copy `dist/washing-machine-card.js` to `config/www/washing-machine-card.js`.
+1. Copy `washing-machine-card.js` to `config/www/washing-machine-card.js`.
 2. Settings → Dashboards → Resources → add `/local/washing-machine-card.js` as a JavaScript module.
 
 ## Configuration
@@ -69,12 +69,9 @@ state_map:                                           # optional, extend/override
 
 ## Development
 
-```bash
-npm install
-npm run build     # outputs dist/washing-machine-card.js
-npm run watch      # rebuild on save
-npm run typecheck
-```
+Plain JavaScript, no build step: edit `washing-machine-card.js` directly, copy/symlink it into `config/www/`, and reload the dashboard in your browser (bump the resource URL's `?v=` query string, or hard-refresh, if HA has it cached).
+
+The visual editor uses Home Assistant's own `<ha-form>`, borrowing the frontend's already-loaded `LitElement` at runtime rather than bundling Lit as a dependency — so it only registers itself inside a real Home Assistant frontend, not in a standalone test page. YAML configuration works everywhere.
 
 ## License
 
